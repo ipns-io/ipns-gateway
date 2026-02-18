@@ -1,0 +1,8 @@
+name = "ipns-gateway"
+main = "worker.js"
+compatibility_date = "2026-02-16"
+
+[vars]
+APEX_DOMAIN = "ipns.io"
+IPFS_GATEWAY_ORIGIN = "https://cloudflare-ipfs.com/ipfs/"
+
