@@ -12,11 +12,11 @@ This gateway resolves a name from an onchain registry contract, fetches content 
 - Optional DNSLink fallback (`_dnslink.<host>` TXT)
 - Optional branded apex landing page via `LANDING_CID`
 
-Example: one registry name (`alice`) can resolve on many branded gateways:
+Example: one registry name (`yourname`) can resolve on many branded gateways:
 
-- `alice.ipns.io`
-- `alice.cid.run`
-- `alice.nameipfs.com`
+- `yourname.ipns.io`
+- `yourname.cid.run`
+- `yourname.nameipfs.com`
 
 Same contract. Same CID. Different gateway front-doors.
 
@@ -78,7 +78,7 @@ node server.js
 
 Then test:
 
-- `http://localhost:8787/alice/`
+- `http://localhost:8787/yourname/`
 
 ## Trust Note
 
