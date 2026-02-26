@@ -3,6 +3,8 @@ main = "worker.js"
 compatibility_date = "2026-02-16"
 
 [vars]
+BASE_RPC_URL = "https://base-rpc.publicnode.com"
+CONTRACT_ADDRESS = "0x1bbE8783884C23e1bf02F1221291696798002d8a"
 APEX_DOMAIN = "ipns.io"
-IPFS_GATEWAY_ORIGIN = "https://cloudflare-ipfs.com/ipfs/"
-
+IPFS_GATEWAY_ORIGIN = "https://ipfs.io/ipfs/"
+LANDING_CID = "QmUFpbaUgVJHvNNbMPwDGb9mvSDRPevfGS3khbQE1JA58x"

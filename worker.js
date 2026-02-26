@@ -2,8 +2,9 @@
 // Cloudflare Workers reference gateway (Gateway Resolution Spec v0).
 
 const SELECTOR_RESOLVE = "0x461a4478"; // resolve(string)
-const SELECTOR_RESOLVE_SUB = "0x6422a748"; // resolveSub(string,string)
 const TXT_RECORD_TYPE = 16;
+const SUBNAME_UNSUPPORTED_MSG =
+  "subnames not supported for launch: primary names only";
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2) + "\n", {
@@ -78,40 +79,6 @@ function abiEncodeResolve(name) {
   return SELECTOR_RESOLVE + bufToHex(args).slice(2);
 }
 
-function abiEncodeResolveSub(name, label) {
-  const nameBytes = new TextEncoder().encode(name);
-  const labelBytes = new TextEncoder().encode(label);
-
-  const tail1 = (() => {
-    const len = u256be(nameBytes.length);
-    const data = pad32(nameBytes);
-    const out = new Uint8Array(32 + data.length);
-    out.set(len, 0);
-    out.set(data, 32);
-    return out;
-  })();
-
-  const tail2 = (() => {
-    const len = u256be(labelBytes.length);
-    const data = pad32(labelBytes);
-    const out = new Uint8Array(32 + data.length);
-    out.set(len, 0);
-    out.set(data, 32);
-    return out;
-  })();
-
-  const head1 = u256be(64);
-  const head2 = u256be(64 + tail1.length);
-
-  const args = new Uint8Array(64 + tail1.length + tail2.length);
-  args.set(head1, 0);
-  args.set(head2, 32);
-  args.set(tail1, 64);
-  args.set(tail2, 64 + tail1.length);
-
-  return SELECTOR_RESOLVE_SUB + bufToHex(args).slice(2);
-}
-
 function abiDecodeString(hex) {
   if (!hex || hex === "0x") return "";
   const buf = hexToBuf(hex);
@@ -142,8 +109,8 @@ async function rpcCall(rpcUrl, method, params) {
   return j.result;
 }
 
-async function resolveCid(env, name, sub) {
-  const data = sub ? abiEncodeResolveSub(name, sub) : abiEncodeResolve(name);
+async function resolveCid(env, name) {
+  const data = abiEncodeResolve(name);
   const result = await rpcCall(env.BASE_RPC_URL, "eth_call", [{ to: env.CONTRACT_ADDRESS, data }, "latest"]);
   return abiDecodeString(result);
 }
@@ -156,8 +123,8 @@ function splitHost(host, apexDomain) {
   if (!h.endsWith(`.${apexDomain}`)) return null;
   const left = h.slice(0, -(apexDomain.length + 1));
   const labels = left.split(".").filter(Boolean);
-  if (labels.length === 1) return { mode: "subdomain", name: labels[0], sub: "" };
-  if (labels.length === 2) return { mode: "subdomain", name: labels[1], sub: labels[0] };
+  if (labels.length === 1) return { mode: "subdomain", name: labels[0] };
+  if (labels.length === 2) return { mode: "subname_unsupported" };
   return { mode: "invalid" };
 }
 
@@ -242,12 +209,14 @@ async function resolveDnslinkTarget(env, hostname, depth = 0) {
   return null;
 }
 
-function wrapUpstreamResponse(upstreamResp, fetchPath, cacheControl) {
+function wrapUpstreamResponse(upstreamResp, fetchPath, cacheControl, resolvedCid) {
   const headers = new Headers(upstreamResp.headers);
   const ct = (headers.get("content-type") || "").toLowerCase();
   if (!ct || ct.startsWith("application/octet-stream")) headers.set("content-type", contentTypeForPath(fetchPath));
   headers.set("cache-control", cacheControl);
   headers.set("x-content-type-options", "nosniff");
+  const normalized = `/${String(fetchPath || "/index.html").replace(/^\/+/, "")}`;
+  headers.set("x-ipfs-path", `/ipfs/${resolvedCid}${normalized}`);
   return new Response(upstreamResp.body, {
     status: upstreamResp.status,
     statusText: upstreamResp.statusText,
@@ -279,18 +248,25 @@ export default {
       const pathname = defaultIndex(url.pathname || "/");
       const origin = (env.IPFS_GATEWAY_ORIGIN || "https://cloudflare-ipfs.com/ipfs/").replace(/\/+$/, "") + "/";
       const upstream = `${origin}${env.LANDING_CID}${pathname}`;
-      const upstreamResp = await fetch(upstream);
+      let upstreamResp = await fetch(upstream);
+      if (!upstreamResp.ok && pathname === "/index.html") {
+        upstreamResp = await fetch(`${origin}${env.LANDING_CID}`);
+      }
       if (!upstreamResp.ok) return text("landing content not found", 404);
-      return wrapUpstreamResponse(upstreamResp, pathname, "public, max-age=60");
+      const resp = wrapUpstreamResponse(upstreamResp, pathname, "public, max-age=60", env.LANDING_CID);
+      if (pathname === "/index.html") {
+        resp.headers.set("x-ipfs-path", `/ipfs/${env.LANDING_CID}/index.html`);
+      }
+      return resp;
     }
 
     const hostInfo = splitHost(host, apex);
     if (!hostInfo && !dnslinkEnabled) return text("unknown host", 404);
     if (hostInfo.mode === "invalid") return text("unsupported subdomain depth", 404);
+    if (hostInfo.mode === "subname_unsupported") return text(SUBNAME_UNSUPPORTED_MSG, 410);
 
     let pathname = url.pathname || "/";
     let name = "";
-    let sub = "";
     let resolvedCid = "";
     let cacheControl = "public, max-age=60, s-maxage=300, stale-while-revalidate=30";
 
@@ -298,27 +274,23 @@ export default {
       const parts = pathname.split("/").filter(Boolean);
       if (hostInfo.forceName) {
         name = hostInfo.forceName;
-        sub = "";
         pathname = "/" + parts.join("/");
         if (pathname === "//" || pathname === "") pathname = "/";
       } else {
         if (parts.length === 0) return text("missing name", 404);
         name = parts[0];
-        sub = "";
         pathname = "/" + parts.slice(1).join("/");
         if (pathname === "/") pathname = "/";
       }
     } else {
       name = hostInfo.name;
-      sub = hostInfo.sub;
     }
 
     if (hostInfo) {
+      if (name.includes(".")) return text(SUBNAME_UNSUPPORTED_MSG, 410);
       const nn = normalizeLabel(name);
       if (!nn.ok) return text("invalid name", 404);
-      const sn = sub ? normalizeLabel(sub) : { ok: true, value: "" };
-      if (!sn.ok) return text("invalid subname", 404);
-      resolvedCid = await resolveCid(env, nn.value, sn.value || "");
+      resolvedCid = await resolveCid(env, nn.value);
       if (!resolvedCid) return text("name not found / expired / empty cid", 404);
     } else {
       const target = await resolveDnslinkTarget(env, host);
@@ -330,7 +302,7 @@ export default {
         cacheControl = "public, max-age=60, s-maxage=300, stale-while-revalidate=30";
         const nn = normalizeLabel(target.id);
         if (!nn.ok) return text("unsupported dnslink ipns target", 404);
-        resolvedCid = await resolveCid(env, nn.value, "");
+        resolvedCid = await resolveCid(env, nn.value);
       }
       if (!resolvedCid) return text("name not found / expired / empty cid", 404);
     }
@@ -345,7 +317,7 @@ export default {
     if (!resp) {
       const upstreamResp = await fetch(upstream);
       if (!upstreamResp.ok) return text("content not found on upstream gateway", 404);
-      resp = wrapUpstreamResponse(upstreamResp, ipfsPath, cacheControl);
+      resp = wrapUpstreamResponse(upstreamResp, ipfsPath, cacheControl, resolvedCid);
       ctx.waitUntil(cache.put(cacheKey, resp.clone()));
     }
     return resp;
