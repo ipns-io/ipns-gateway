@@ -4,10 +4,11 @@ Reference Cloudflare Worker + local Node server for IPNS-style gateway resolutio
 
 This gateway resolves a name from an onchain registry contract, fetches content from IPFS by CID, and serves it over normal HTTPS.
 
+For launch, IPNS supports primary names only. Subnames are intentionally out of scope until a hardened v2 design is implemented and audited.
+
 ## What It Supports
 
 - `https://<name>.<apex>/...`
-- `https://<sub>.<name>.<apex>/...` (subname mode)
 - `https://<apex>/<name>/...` (path mode)
 - Optional DNSLink fallback (`_dnslink.<host>` TXT)
 - Optional branded apex landing page via `LANDING_CID`
@@ -84,3 +85,7 @@ Then test:
 
 The registry state is onchain; gateway delivery is a trust point.  
 Users can switch gateways while keeping the same onchain name.
+
+## Ops Notes
+
+- Patch notes: `OPS_PATCH_NOTES.md`

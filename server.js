@@ -25,8 +25,9 @@ if (!CONTRACT_ADDRESS) throw new Error("missing CONTRACT_ADDRESS");
 
 // Function selectors (keccak256(signature) first 4 bytes)
 const SELECTOR_RESOLVE = "0x461a4478"; // resolve(string)
-const SELECTOR_RESOLVE_SUB = "0x6422a748"; // resolveSub(string,string)
 const TXT_RECORD_TYPE = 16;
+const SUBNAME_UNSUPPORTED_MSG =
+  "subnames not supported for launch: primary names only";
 
 function bad(res, code, msg) {
   res.writeHead(code, { "content-type": "text/plain; charset=utf-8" });
@@ -98,39 +99,6 @@ function abiEncodeResolve(name) {
   return SELECTOR_RESOLVE + bufToHex(args).slice(2);
 }
 
-function abiEncodeResolveSub(name, label) {
-  const nameBytes = new TextEncoder().encode(name);
-  const labelBytes = new TextEncoder().encode(label);
-
-  const tail1 = (() => {
-    const len = u256be(nameBytes.length);
-    const data = pad32(nameBytes);
-    const out = new Uint8Array(32 + data.length);
-    out.set(len, 0);
-    out.set(data, 32);
-    return out;
-  })();
-  const tail2 = (() => {
-    const len = u256be(labelBytes.length);
-    const data = pad32(labelBytes);
-    const out = new Uint8Array(32 + data.length);
-    out.set(len, 0);
-    out.set(data, 32);
-    return out;
-  })();
-
-  const head1 = u256be(64); // first tail starts after 2 head slots
-  const head2 = u256be(64 + tail1.length);
-
-  const args = new Uint8Array(64 + tail1.length + tail2.length);
-  args.set(head1, 0);
-  args.set(head2, 32);
-  args.set(tail1, 64);
-  args.set(tail2, 64 + tail1.length);
-
-  return SELECTOR_RESOLVE_SUB + bufToHex(args).slice(2);
-}
-
 function abiDecodeString(hex) {
   if (!hex || hex === "0x") return "";
   const buf = hexToBuf(hex);
@@ -161,8 +129,8 @@ async function rpcCall(method, params) {
   return j.result;
 }
 
-async function resolveCid(name, sub) {
-  const data = sub ? abiEncodeResolveSub(name, sub) : abiEncodeResolve(name);
+async function resolveCid(name) {
+  const data = abiEncodeResolve(name);
   const result = await rpcCall("eth_call", [{ to: CONTRACT_ADDRESS, data }, "latest"]);
   return abiDecodeString(result);
 }
@@ -176,8 +144,8 @@ function splitHost(host) {
   if (!h.endsWith(`.${APEX_DOMAIN}`)) return null;
   const left = h.slice(0, -(APEX_DOMAIN.length + 1)); // drop ".apex"
   const labels = left.split(".").filter(Boolean);
-  if (labels.length === 1) return { mode: "subdomain", name: labels[0], sub: "" };
-  if (labels.length === 2) return { mode: "subdomain", name: labels[1], sub: labels[0] };
+  if (labels.length === 1) return { mode: "subdomain", name: labels[0] };
+  if (labels.length === 2) return { mode: "subname_unsupported" };
   return { mode: "invalid" };
 }
 
@@ -279,24 +247,22 @@ async function handle(req, res) {
   const hostInfo = splitHost(host);
   if (!hostInfo && !ENABLE_DNSLINK) return bad(res, 404, "unknown host");
   if (hostInfo.mode === "invalid") return bad(res, 404, "unsupported subdomain depth");
+  if (hostInfo.mode === "subname_unsupported") return bad(res, 410, SUBNAME_UNSUPPORTED_MSG);
 
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   let pathname = normalizePath(url.pathname);
 
   let name = "";
-  let sub = "";
 
   if (hostInfo && hostInfo.mode === "path") {
     // /<name>/<rest>
     const parts = pathname.split("/").filter(Boolean);
     if (parts.length === 0) return bad(res, 404, "missing name");
     name = parts[0];
-    sub = "";
     pathname = "/" + parts.slice(1).join("/");
     if (pathname === "/") pathname = "/";
   } else if (hostInfo) {
     name = hostInfo.name;
-    sub = hostInfo.sub;
   }
 
   let cid = "";
@@ -304,10 +270,9 @@ async function handle(req, res) {
 
   if (hostInfo) {
     const nn = normalizeLabel(name);
+    if (name.includes(".")) return bad(res, 410, SUBNAME_UNSUPPORTED_MSG);
     if (!nn.ok) return bad(res, 404, "invalid name");
-    const sn = sub ? normalizeLabel(sub) : { ok: true, value: "" };
-    if (!sn.ok) return bad(res, 404, "invalid subname");
-    cid = await resolveCid(nn.value, sn.value || "");
+    cid = await resolveCid(nn.value);
     if (!cid) return bad(res, 404, "name not found / expired / empty cid");
   } else {
     const target = await resolveDnslinkTarget(host);
@@ -318,7 +283,7 @@ async function handle(req, res) {
     } else {
       const nn = normalizeLabel(target.id);
       if (!nn.ok) return bad(res, 404, "unsupported dnslink ipns target");
-      cid = await resolveCid(nn.value, "");
+      cid = await resolveCid(nn.value);
       if (!cid) return bad(res, 404, "name not found / expired / empty cid");
     }
   }
