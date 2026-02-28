@@ -254,7 +254,8 @@ export default {
 
     // Keep favicon assets stable for apex landing hosts even when the landing
     // CID is pinned as index-only content.
-    if ((host === apex || host === `www.${apex}`) && FAVICON_PATHS.has(url.pathname)) {
+    const iconHosts = new Set([apex, `www.${apex}`, `status.${apex}`, `admin.${apex}`]);
+    if (iconHosts.has(host) && FAVICON_PATHS.has(url.pathname)) {
       const iconFile = url.pathname.replace(/^\/+/, "");
       const iconOrigin = (env.LANDING_ICON_ORIGIN || "https://www.confetti.wtf").replace(/\/+$/, "");
       const iconResp = await fetch(`${iconOrigin}/${iconFile}`);
