@@ -260,6 +260,28 @@ export default {
       return resp;
     }
 
+    const surfaceCid =
+      host === `admin.${apex}`
+        ? env.ADMIN_SURFACE_CID
+        : host === `status.${apex}`
+          ? env.STATUS_SURFACE_CID
+          : "";
+    if (surfaceCid) {
+      const pathname = defaultIndex(url.pathname || "/");
+      const origin = (env.IPFS_GATEWAY_ORIGIN || "https://cloudflare-ipfs.com/ipfs/").replace(/\/+$/, "") + "/";
+      const upstream = `${origin}${surfaceCid}${pathname}`;
+      let upstreamResp = await fetch(upstream);
+      if (!upstreamResp.ok && pathname === "/index.html") {
+        upstreamResp = await fetch(`${origin}${surfaceCid}`);
+      }
+      if (!upstreamResp.ok) return text("surface content not found", 404);
+      const resp = wrapUpstreamResponse(upstreamResp, pathname, "public, max-age=60", surfaceCid);
+      if (pathname === "/index.html") {
+        resp.headers.set("x-ipfs-path", `/ipfs/${surfaceCid}/index.html`);
+      }
+      return resp;
+    }
+
     const hostInfo = splitHost(host, apex);
     if (!hostInfo && !dnslinkEnabled) return text("unknown host", 404);
     if (hostInfo.mode === "invalid") return text("unsupported subdomain depth", 404);
