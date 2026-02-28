@@ -5,6 +5,14 @@ const SELECTOR_RESOLVE = "0x461a4478"; // resolve(string)
 const TXT_RECORD_TYPE = 16;
 const SUBNAME_UNSUPPORTED_MSG =
   "subnames not supported for launch: primary names only";
+const FAVICON_PATHS = new Set([
+  "/favicon.ico",
+  "/favicon-16x16.png",
+  "/favicon-32x32.png",
+  "/favicon-64x64.png",
+  "/favicon-192x192.png",
+  "/apple-touch-icon.png",
+]);
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj, null, 2) + "\n", {
@@ -243,6 +251,26 @@ export default {
 
     const apex = (env.APEX_DOMAIN || "ipns.io").toLowerCase();
     const host = String(request.headers.get("host") || "").toLowerCase().split(":")[0];
+
+    // Keep favicon assets stable for apex landing hosts even when the landing
+    // CID is pinned as index-only content.
+    if ((host === apex || host === `www.${apex}`) && FAVICON_PATHS.has(url.pathname)) {
+      const iconFile = url.pathname.replace(/^\/+/, "");
+      const iconOrigin = (env.LANDING_ICON_ORIGIN || "https://www.confetti.wtf").replace(/\/+$/, "");
+      const iconResp = await fetch(`${iconOrigin}/${iconFile}`);
+      if (iconResp.ok) {
+        const headers = new Headers(iconResp.headers);
+        headers.set("cache-control", "public, max-age=3600, s-maxage=86400");
+        headers.set("content-type", contentTypeForPath(url.pathname));
+        headers.set("x-content-type-options", "nosniff");
+        headers.set("x-ipfs-path", `${iconOrigin}/${iconFile}`);
+        return new Response(iconResp.body, {
+          status: iconResp.status,
+          statusText: iconResp.statusText,
+          headers,
+        });
+      }
+    }
 
     if ((host === apex || host === `www.${apex}`) && env.LANDING_CID) {
       const pathname = defaultIndex(url.pathname || "/");
